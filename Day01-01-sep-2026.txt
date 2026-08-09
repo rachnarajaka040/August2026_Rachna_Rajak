@@ -1,6 +1,0 @@
-1 hour – Revised AWS concepts and services
-30 mins – Coding practice
-1 hour – English speaking practice 
-2 hours – Practiced 2 sets of interview questions
-30 mins – Revised Linux and DevOps concepts
-30 mins – Reviewed Git and GitHub concepts
