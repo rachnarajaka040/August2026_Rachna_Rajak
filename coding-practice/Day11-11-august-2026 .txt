@@ -1,0 +1,198 @@
+# ============================================================
+# 1. ANSIBLE — INSTALL HELM ON SERVER
+# ============================================================
+
+---
+- name: Install Helm
+  hosts: all
+  become: yes
+
+  tasks:
+
+    - name: Download Helm
+      get_url:
+        url: https://get.helm.sh/helm-v3.7.0-linux-amd64.tar.gz
+        dest: /tmp/helm.tar.gz
+
+    - name: Extract Helm
+      unarchive:
+        src: /tmp/helm.tar.gz
+        dest: /tmp/
+        remote_src: yes
+
+    - name: Move Helm binary
+      command:
+        cmd: mv /tmp/linux-amd64/helm /usr/local/bin/helm
+
+    - name: Set Helm binary permissions
+      file:
+        path: /usr/local/bin/helm
+        mode: '0755'
+
+
+# ============================================================
+# 2. TERRAFORM — EC2 WITH ELASTIC IP
+# ============================================================
+
+provider "aws" {
+  region = "us-east-1"
+}
+
+resource "aws_instance" "pathnex_ec2" {
+  ami           = "ami-0abcd1234abcd1234"
+  instance_type = "t3.medium"
+
+  tags = {
+    Name = "Pathnex-EC2"
+  }
+}
+
+resource "aws_eip" "pathnex_eip" {
+  instance = aws_instance.pathnex_ec2.id
+
+  tags = {
+    Name = "Pathnex-EIP"
+  }
+}
+
+
+# ============================================================
+# 3. KUBERNETES — HELM CHART FOR NGINX
+# ============================================================
+
+helm repo add stable https://charts.helm.sh/stable
+
+helm repo update
+
+helm install pathnex-nginx stable/nginx-ingress
+
+
+# ============================================================
+# 4. JENKINSFILE — MULTI-STAGE PIPELINE
+# ============================================================
+
+pipeline {
+
+  agent any
+
+  environment {
+    IMAGE_NAME = 'your-dockerhub-username/pathnex-web-app'
+    IMAGE_TAG  = 'latest'
+  }
+
+  stages {
+
+    stage('Checkout') {
+
+      steps {
+
+        git 'https://github.com/pathnex/sample-repo.git'
+
+      }
+    }
+
+    stage('Build Docker Image') {
+
+      steps {
+
+        script {
+
+          docker.build(
+            "${IMAGE_NAME}:${IMAGE_TAG}"
+          )
+
+        }
+      }
+    }
+
+    stage('Push Docker Image') {
+
+      steps {
+
+        script {
+
+          docker.withRegistry(
+            'https://index.docker.io/v1/',
+            'docker-credentials'
+          ) {
+
+            docker.image(
+              "${IMAGE_NAME}:${IMAGE_TAG}"
+            ).push()
+
+          }
+        }
+      }
+    }
+
+    stage('Deploy to Kubernetes') {
+
+      steps {
+
+        script {
+
+          sh 'kubectl apply -f deployment.yaml'
+
+        }
+      }
+    }
+  }
+}
+
+
+# ============================================================
+# 5. GITLAB CI/CD — BUILD, PUSH AND DEPLOY WITH HELM
+# ============================================================
+
+stages:
+  - build
+  - push
+  - deploy
+
+variables:
+  IMAGE_NAME: "$CI_REGISTRY_IMAGE/pathnex-web-app"
+
+
+build:
+
+  stage: build
+
+  script:
+    - docker build -t "$IMAGE_NAME:$CI_COMMIT_SHORT_SHA" .
+
+
+push:
+
+  stage: push
+
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin
+    - docker push "$IMAGE_NAME:$CI_COMMIT_SHORT_SHA"
+
+
+deploy:
+
+  stage: deploy
+
+  script:
+    - helm repo add stable https://charts.helm.sh/stable
+    - helm repo update
+    - helm upgrade --install pathnex-nginx stable/nginx-ingress
+
+
+# ============================================================
+# 6. DOCKER — EXPOSE AND PORT MAPPING
+# ============================================================
+
+FROM nginx
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
+
+
+# ============================================================
+# DOCKER PORT MAPPING
+# ============================================================
+
+docker run -d -p 8080:80 nginx
