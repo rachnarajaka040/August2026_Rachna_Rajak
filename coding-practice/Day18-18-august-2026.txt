@@ -1,0 +1,121 @@
+- name: Setup HAProxy Load load_balancer_arn
+  hosts: load_balancer
+  become: yes
+
+  tasks:
+
+  - name: Install HAProxy
+    Yum:
+      name: haproxy
+      state: present
+
+  - name: Configure HAProxy
+   template:
+   src: haproxy.cfg.j2
+   dest: /etc/haproxy/haproxy.cfg
+   owner: root
+   group: root
+   mode: '0644'
+   notify: Restart HAProxy
+
+- name: Start and enable HAProxy
+      service:
+        name: haproxy
+        state: started
+        enabled: yes
+
+  handlers:
+
+    - name: Restart HAProxy
+      service:
+        name: haproxy
+        state: restarted
+
+
+
+        resource "aws_lb" "pathnex_lb" {
+  name               = "pathnex-lb"
+  internal           = false
+  load_balancer_type = "application"
+
+  security_groups = [
+    aws_security_group.allow_http.id
+  ]
+
+  subnets = [
+    aws_subnet.public.id,
+    aws_subnet.public2.id
+  ]
+}
+
+resource "aws_launch_template" "pathnex_template" {
+  name_prefix   = "pathnex-"
+  image_id      = var.ami_id
+  instance_type = "t2.micro"
+
+  network_interfaces {
+    security_groups = [
+      aws_security_group.allow_http.id
+    ]
+  }
+}
+
+resource "aws_autoscaling_group" "pathnex_asg" {
+  name = "pathnex-asg"
+
+  desired_capacity = 3
+  min_size         = 2
+  max_size         = 5
+
+  vpc_zone_identifier = [
+    aws_subnet.public.id,
+    aws_subnet.public2.id
+  ]
+
+  launch_template {
+    id      = aws_launch_template.pathnex_template.id
+    version = "$Latest"
+  }
+}
+
+pipeline {
+    agent any
+
+    stages {
+
+        stage('Build') {
+            steps {
+                echo 'Building Docker image...'
+                docker.build("pathnex-web-app:${BUILD_NUMBER}")
+            }
+        }
+
+        stage('Test') {
+            steps {
+                echo 'Running tests...'
+            }
+        }
+
+        stage('Deploy Blue') {
+            steps {
+                sh 'kubectl apply -f kubernetes/blue-deployment.yaml'
+                sh 'kubectl rollout status deployment/blue-deployment'
+            }
+        }
+
+        stage('Deploy Green') {
+            steps {
+                sh 'kubectl apply -f kubernetes/green-deployment.yaml'
+                sh 'kubectl rollout status deployment/green-deployment'
+            }
+        }
+
+        stage('Switch Traffic') {
+            steps {
+                echo 'Switching traffic from Blue to Green...'
+
+                sh 'kubectl apply -f kubernetes/service-green.yaml'
+            }
+        }
+    }
+}

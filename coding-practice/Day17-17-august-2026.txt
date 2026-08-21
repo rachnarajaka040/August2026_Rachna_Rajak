@@ -1,0 +1,107 @@
+- name: Configure Auto-healing for web server
+  hosts: all
+  become: yes
+
+  tasks:
+    - name: Ensure ngnix service is Running
+     service:
+      name: nginx
+      state: started
+      enabled: yes
+  
+    - name: Create systemd override directory
+      file: 
+      path: /etc/systemd/system/nginx.service.d
+      state: directory
+
+    - name: Setup auto-restart for nginx service
+      copy:
+        dest: /etc/systemd/system/nginx.service.d/override.conf
+        content: |
+          [Service]
+          Restart=always
+
+    - name: Relod systemd
+        command: systemctl daemon-reload
+
+
+
+#Terraform
+
+provider "aws"{
+    region: "us-east-1
+}
+
+provider "azureerm"
+{
+    features {}
+}
+
+resource "aws_vpc" "main"
+{
+    cidr_block = "10.0.0.0/16"
+}
+
+resource "azurerm_resource_group" "main" {
+  name     = "pathnex-rg"
+  location = "East US"
+}
+
+resource "azurerm_virtual_network" "main"{
+    name ="pathnex-vnet"
+    location            = azurerm_resource_group.main.location
+  address_space       = ["10.0.0.0/16"]
+  resource_group_name = azurerm_resource_group.main.name
+}
+
+resource "aws_instance" "pathnex_ec2" {
+  ami           = "ami-0abcd1234abcd1234"
+  instance_type = "t2.micro"
+}
+
+
+
+#kubernetes
+
+apiversion: apps/v1
+kind:  Deployment
+
+metadata:
+    name: pathnex-web-app
+
+spec:
+    replicas: 3
+
+selector:
+   matchLabels:
+      apps: pathnex-web-app
+
+template:
+   metadata:
+   labels:
+      app: pathnex-web-app
+
+spec:
+ containers:
+    - name: nginx
+      image: nginx:latest
+
+      ports:
+      - containerPort: 80
+
+
+       # Checks whether the container is still alive
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          # Checks whether the container is ready to receive traffic
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
