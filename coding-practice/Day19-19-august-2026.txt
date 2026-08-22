@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+
+# --------------------------------------------------
+# 1. Ansible Playbook
+# --------------------------------------------------
+
+- name: Install Prometheus for Monitoring
+  hosts: all
+  become: yes
+  tasks:
+    - name: Ensure EPEL repository is present (RHEL/CentOS)
+      yum:
+        name: epel-release
+        state: present
+
+    - name: Install Prometheus dependencies
+      yum:
+        name:
+          - prometheus
+          - golang-github-prometheus-node-exporter
+        state: present
+
+    - name: Start Prometheus service
+      service:
+        name: prometheus
+        state: started
+        enabled: yes
+EOF
+
+# --------------------------------------------------
+# 2. Terraform CloudWatch Configuration
+# --------------------------------------------------
+
+resource "aws_cloudwatch_log_group" "pathnex_log_group" {
+  name              = "pathnex-log-group"
+  retention_in_days = 30
+}
+
+resource "aws_cloudwatch_log_stream" "pathnex_log_stream" {
+  log_group_name = aws_cloudwatch_log_group.pathnex_log_group.name
+  name           = "pathnex-log-stream"
+}
+EOF
+
+# --------------------------------------------------
+# 3. Kubernetes Fluentd DaemonSet
+# --------------------------------------------------
+cat << 'EOF' > kubernetes/fluentd-daemonset.yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fluentd
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app: fluentd
+  template:
+    metadata:
+      labels:
+        app: fluentd
+    spec:
+      containers:
+        - name: fluentd
+          image: fluent/fluentd:v1.16-debian-1
+          ports:
+            - containerPort: 24224
+              name: fluentd
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fluentd
+  namespace: kube-system
+spec:
+  selector:
+    app: fluentd
+  ports:
+    - protocol: TCP
+      port: 24224
+      targetPort: 24224
+EOF
+
+# --------------------------------------------------
+# 4. Jenkinsfile
+# --------------------------------------------------
+
+pipeline {
+    agent any
+    stages {
+        stage('Build') {
+            steps {
+                echo 'Building Docker image...'
+                script {
+                    docker.build('pathnex-web-app')
+                }
+            }
+        }
+        stage('Test') {
+            steps {
+                echo 'Running tests...'
+            }
+        }
+        stage('Monitor Deployment') {
+            steps {
+                script {
+                    sh 'kubectl apply -f kubernetes/deployment.yaml'
+                    sh 'kubectl rollout status deployment/pathnex-web-app --timeout=60s'
+                }
+            }
+        }
+    }
+}
+EOF
+
+# --------------------------------------------------
+# 5. GitLab CI/CD Configuration
+# --------------------------------------------------
+
+stages:
+  - build
+  - push
+  - deploy
+
+build:
+  stage: build
+  script:
+    - docker build -t pathnex-web-app .
+
+push:
+  stage: push
+  script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
+    - docker push pathnex-web-app
+
+deploy:
+  stage: deploy
+  script:
+    - kubectl apply -f kubernetes/deployment.yaml
+    - kubectl rollout status deployment/pathnex-web-app --timeout=60s
+EOF
+
+# --------------------------------------------------
+# 6. Python Flask Application
+# --------------------------------------------------
+
+from flask import Flask
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Hello Pathnex"
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
+EOF
+
+# --------------------------------------------------
+# 7. Dockerfile
+# --------------------------------------------------
+
+FROM python:3.11-slim
+
+WORKDIR /opt/pathnex/flask-app
+
+RUN pip install --no-cache-dir flask
+
+COPY app/ /opt/pathnex/flask-app/
+
+EXPOSE 5000
+
+CMD ["python", "app.py"]
+EOF
+
+echo "All Day 19 code modules written successfully!"
