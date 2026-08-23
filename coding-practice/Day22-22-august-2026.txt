@@ -1,0 +1,128 @@
+
+- name: Deploy Nginx across multiple Kubernetes clusters
+  hosts: localhost
+  connection: local
+  vars:
+    clusters:
+      - us-east-cluster
+      - us-west-cluster
+  tasks:
+    - name: Deploy Nginx manifest to each target cluster
+      kubernetes.core.k8s:
+        context: "{{ item }}"
+        src: kubernetes/deployment.yaml
+        state: present
+      loop: "{{ clusters }}"
+
+
+      terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+    google = {
+      source  = "hashicorp/google"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = "us-east-1"
+}
+
+provider "google" {
+  project = "pathnex-devops-project"
+  region  = "us-central1"
+}
+
+# AWS EKS Cluster Setup
+resource "aws_iam_role" "eks_cluster_role" {
+  name = "pathnex-eks-cluster-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "eks.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "eks_cluster_policy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+  role       = aws_iam_role.eks_cluster_role.name
+}
+
+resource "aws_eks_cluster" "pathnex_eks" {
+  name     = "pathnex-eks-cluster"
+  role_arn = aws_iam_role.eks_cluster_role.arn
+
+  vpc_config {
+    subnet_ids = ["subnet-0123456789abcdef0", "subnet-0fe23456789abcdef0"]
+  }
+
+  depends_on = [aws_iam_role_policy_attachment.eks_cluster_policy]
+}
+
+# GCP GKE Cluster Setup
+resource "google_container_cluster" "pathnex_gke" {
+  name     = "pathnex-gke-cluster"
+  location = "us-central1-a"
+
+  remove_default_node_pool = true
+  initial_node_count       = 1
+}
+
+resource "google_container_node_pool" "primary_nodes" {
+  name       = "pathnex-node-pool"
+  location   = "us-central1-a"
+  cluster    = google_container_cluster.pathnex_gke.name
+  node_count = 3
+
+  node_config {
+    machine_type = "e2-medium"
+    oauth_scopes = [
+      "[https://www.googleapis.com/auth/cloud-platform](https://www.googleapis.com/auth/cloud-platform)"
+    ]
+  }
+}
+
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pathnex-deployment
+  namespace: default
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: pathnex-app
+  template:
+    metadata:
+      labels:
+        app: pathnex-app
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.25
+          ports:
+            - containerPort: 80
+---
+apiVersion: policy.karmada.io/v1alpha1
+kind: PropagationPolicy
+metadata:
+  name: pathnex-propagation-policy
+  namespace: default
+spec:
+  resourceSelectors:
+    - apiVersion: apps/v1
+      kind: Deployment
+      name: pathnex-deployment
+  placement:
+    clusterAffinity:
+      clusterNames:
+        - member1
+        - member2
