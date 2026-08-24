@@ -1,0 +1,94 @@
+
+- name: Backup /etc directory from remote nodes
+  hosts: all
+  become: yes
+  tasks:
+    - name: Compress /etc directory on host
+      community.general.archive:
+        path: /etc
+        dest: /tmp/etc-backup.tar.gz
+        format: gz
+
+    - name: Fetch backup archive to central control node
+      ansible.builtin.fetch:
+        src: /tmp/etc-backup.tar.gz
+        dest: /backups/{{ inventory_hostname }}/etc-backup.tar.gz
+        flat: yes
+
+- name: Restore /etc directory on target nodes
+  hosts: restore_targets
+  become: yes
+  tasks:
+    - name: Extract backup archive to target system root
+      ansible.builtin.unarchive:
+        src: /backups/{{ inventory_hostname }}/etc-backup.tar.gz
+        dest: /
+        remote_src: no
+
+
+# terraform
+provider "aws" {
+  alias  = "primary"
+  region = "us-east-1"
+}
+
+provider "aws" {
+  alias  = "secondary"
+  region = "eu-west-1"
+}
+
+resource "aws_s3_bucket" "source" {
+  provider = aws.primary
+  bucket   = "pathnex-primary-backup-bucket"
+}
+
+resource "aws_s3_bucket" "destination" {
+  provider = aws.secondary
+  bucket   = "pathnex-replica-backup-bucket-eu"
+}
+
+resource "aws_s3_bucket_versioning" "source" {
+  provider = aws.primary
+  bucket   = aws_s3_bucket.source.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_versioning" "destination" {
+  provider = aws.secondary
+  bucket   = aws_s3_bucket.destination.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_iam_role" "replication" {
+  name = "pathnex-s3-replication-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "s3.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_s3_bucket_replication_configuration" "replication" {
+  provider   = aws.primary
+  depends_on = [aws_s3_bucket_versioning.source]
+
+  role   = aws_iam_role.replication.arn
+  bucket = aws_s3_bucket.source.id
+
+  rule {
+    id     = "entire-bucket-crr"
+    status = "Enabled"
+
+    destination {
+      bucket        = aws_s3_bucket.destination.arn
+      storage_class = "STANDARD"
+    }
+  }
+}
