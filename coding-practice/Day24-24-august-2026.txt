@@ -1,0 +1,123 @@
+---
+- name: Deploy Docker Containers with Helm
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Install Helm
+      shell: curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      args:
+        creates: /usr/local/bin/helm
+
+    - name: Deploy or upgrade microservices with Helm
+      command: >
+        helm upgrade --install pathnex-app ./microservice-chart
+
+
+ module "pathnex_vpc" {
+  source = "./vpc"
+}
+
+module "pathnex_instance" {
+  source = "./instance"
+
+  vpc_id = module.pathnex_vpc.vpc_id
+}
+
+output "instance_id" {
+  value = module.pathnex_instance.instance_id
+}
+
+output "vpc_id" {
+  value = module.pathnex_vpc.vpc_id
+}       
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pathnex-web-app
+spec:
+  replicas: 3
+
+  selector:
+    matchLabels:
+      app: pathnex-web-app
+
+  template:
+    metadata:
+      labels:
+        app: pathnex-web-app
+
+    spec:
+      containers:
+        - name: nginx
+          image: nginx
+          ports:
+            - containerPort: 80
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: pathnex-web-app-hpa
+
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: pathnex-web-app
+
+  minReplicas: 2
+  maxReplicas: 10
+
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+
+pipeline {
+    agent any
+
+    stages {
+        stage('Build') {
+            steps {
+                echo 'Building project...'
+            }
+        }
+
+        stage('Test') {
+            steps {
+                echo 'Running tests...'
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                echo 'Deploying project...'
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Pipeline completed successfully.'
+        }
+
+        failure {
+            echo 'Pipeline failed.'
+        }
+    }
+}          
