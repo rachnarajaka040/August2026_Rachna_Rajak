@@ -1,0 +1,136 @@
+- name: Implement SSH Key Authentication
+  hosts: all
+  become: yes
+
+  tasks:
+    - name: Generate SSH key pair
+      community.crypto.openssh_keypair:
+        path: /home/user/.ssh/id_rsa
+        type: rsa
+        size: 2048
+        owner: user
+        group: user
+        mode: '0600'
+
+    - name: Add SSH public key to authorized_keys
+      ansible.posix.authorized_key:
+        user: user
+        state: present
+        key: "{{ lookup('file', '/home/user/.ssh/id_rsa.pub') }}"
+
+        resource "aws_cloudwatch_log_group" "pathnex_flow_logs_group" {
+  name = "pathnex-flow-logs"
+}
+
+resource "aws_iam_role" "pathnex_flow_log_role" {
+  name = "pathnex-flow-log-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Effect = "Allow"
+
+        Principal = {
+          Service = "vpc-flow-logs.amazonaws.com"
+        }
+
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "pathnex_flow_log_policy" {
+  name = "pathnex-flow-log-policy"
+  role = aws_iam_role.pathnex_flow_log_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Effect = "Allow"
+
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogGroups",
+          "logs:DescribeLogStreams"
+        ]
+
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_vpc_flow_log" "pathnex_flow_log" {
+  vpc_id                   = aws_vpc.pathnex_vpc.id
+  traffic_type             = "ALL"
+  log_destination_type     = "cloud-watch-logs"
+  log_destination          = aws_cloudwatch_log_group.pathnex_flow_logs_group.arn
+  iam_role_arn             = aws_iam_role.pathnex_flow_log_role.arn
+}
+
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+
+metadata:
+  name: pathnex-web-policy
+
+spec:
+  podSelector:
+    matchLabels:
+      app: pathnex-web-app
+
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: pathnex-api
+
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: pathnex-
+              
+
+              pipeline {
+    agent any
+
+    stages {
+        stage('Build') {
+            steps {
+                script {
+                    echo 'Building Docker image...'
+                    docker.build('pathnex-web-app')
+                }
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'aws-credentials']
+                ]) {
+                    sh '''
+                        aws ec2 run-instances \
+                        --image-id ami-0abcd1234 \
+                        --count 1 \
+                        --instance-type t2.micro
+                    '''
+                }
+            }
+        }
+    }
+}
