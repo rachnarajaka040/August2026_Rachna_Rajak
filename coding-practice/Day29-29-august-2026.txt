@@ -1,0 +1,107 @@
+- name: Complete Deployment Setup
+  hosts: all
+  become: yes
+
+  tasks:
+    - name: Deploy application with Docker Compose
+      command: docker compose -f /opt/pathnex/docker-compose.yml up -d
+
+      provider "aws" {
+  region = "us-east-1"
+}
+
+resource "aws_vpc" "pathnex_vpc" {
+  cidr_block = "10.0.0.0/16"
+
+  tags = {
+    Name = "pathnex-vpc"
+  }
+}
+
+resource "aws_subnet" "pathnex_subnet" {
+  vpc_id     = aws_vpc.pathnex_vpc.id
+  cidr_block = "10.0.1.0/24"
+
+  tags = {
+    Name = "pathnex-subnet"
+  }
+}
+
+resource "aws_security_group" "pathnex_sg" {
+  name   = "pathnex-sg"
+  vpc_id = aws_vpc.pathnex_vpc.id
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_instance" "pathnex_app" {
+  ami                    = "ami-0abcd1234abcd1234"
+  instance_type          = "t2.medium"
+  subnet_id              = aws_subnet.pathnex_subnet.id
+  vpc_security_group_ids = [aws_security_group.pathnex_sg.id]
+
+  tags = {
+    Name = "pathnex-app"
+  }
+}
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pathnex-app
+
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: pathnex-app
+
+  template:
+    metadata:
+      labels:
+        app: pathnex-app
+
+    spec:
+      containers:
+        - name: nginx
+          image: nginx
+          ports:
+            - containerPort: 80
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: pathnex-service
+
+spec:
+  selector:
+    app: pathnex-app
+
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+
+  type: ClusterIP
