@@ -1,0 +1,338 @@
+#terraform
+
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 6.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = "ap-south-1"
+}
+
+# Create VPC, Subnet, Security Group and EC2
+
+resource "aws_vpc" "pathnex_vpc" {
+  cidr_block = "10.0.0.0/16"
+
+  tags = {
+    Name = "pathnex-vpc"
+  }
+}
+
+resource "aws_subnet" "public_subnet" {
+  vpc_id                  = aws_vpc.pathnex_vpc.id
+  cidr_block              = "10.0.1.0/24"
+  availability_zone       = "ap-south-1a"
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "pathnex-public-subnet"
+  }
+}
+
+resource "aws_security_group" "pathnex_sg" {
+  name   = "pathnex-sg"
+  vpc_id = aws_vpc.pathnex_vpc.id
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "pathnex-sg"
+  }
+}
+
+resource "aws_instance" "pathnex_ec2" {
+  ami           = "ami-0f918f7e67a3323f0"
+  instance_type = "t2.micro"
+
+  subnet_id              = aws_subnet.public_subnet.id
+  vpc_security_group_ids = [aws_security_group.pathnex_sg.id]
+
+  tags = {
+    Name = "Pathnex-Application-Server"
+  }
+}
+
+# Creating a managed MySQL database in AWS.
+
+resource "aws_db_instance" "pathnex_rds" {
+  identifier = "pathnex-db"
+
+  engine         = "mysql"
+  engine_version = "8.0"
+
+  instance_class    = "db.t3.micro"
+  allocated_storage = 20
+
+  username = "admin"
+  password = "rachna@123"
+
+  publicly_accessible = false
+
+  skip_final_snapshot = true
+}
+
+# Packaging the application into Docker containers.
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+
+RUN npm install
+
+COPY . .
+
+EXPOSE 5000
+
+CMD ["npm", "start"]
+
+# Running Frontend, Backend and Database together on your local machine.
+
+services:
+
+  mongodb:
+    image: mongo:7
+
+    container_name: pathnex-mongodb
+
+    ports:
+      - "27017:27017"
+
+  backend:
+    build: ./backend
+
+    container_name: pathnex-backend
+
+    environment:
+      MONGO_URL: mongodb://mongodb:27017/pathnex
+
+    depends_on:
+      - mongodb
+
+    ports:
+      - "5000:5000"
+
+  frontend:
+    build: ./frontend
+
+    container_name: pathnex-frontend
+
+    depends_on:
+      - backend
+
+    ports:
+      - "8080:80"
+
+
+
+# Running the backend application inside Kubernetes.      
+
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: backend
+  namespace: pathnex
+
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: backend
+
+  template:
+    metadata:
+      labels:
+        app: backend
+
+    spec:
+      containers:
+
+        - name: backend
+
+          image: YOUR_DOCKERHUB_USERNAME/pathnex-backend:latest
+
+          ports:
+            - containerPort: 5000
+
+# Allowing other Kubernetes components to communicate with the backend.            
+
+apiVersion: v1
+kind: Service
+
+metadata:
+  name: backend-service
+  namespace: pathnex
+
+spec:
+  selector:
+    app: backend
+
+  ports:
+    - port: 5000
+      targetPort: 5000
+
+  type: ClusterIP
+
+
+# Running the frontend application in Kubernetes.
+
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: frontend
+  namespace: pathnex
+
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: frontend
+
+  template:
+    metadata:
+      labels:
+        app: frontend
+
+    spec:
+      containers:
+
+        - name: frontend
+
+          image: YOUR_DOCKERHUB_USERNAME/pathnex-frontend:latest
+
+          ports:
+            - containerPort: 80
+
+# Exposing the frontend application to users.
+apiVersion: v1
+kind: Service
+
+metadata:
+  name: frontend-service
+  namespace: pathnex
+
+spec:
+
+  selector:
+    app: frontend
+
+  ports:
+    - port: 80
+      targetPort: 80
+
+  type: LoadBalancer            
+
+
+
+  # jenkins pipeline 
+
+  pipeline {
+
+    agent any
+
+    environment {
+
+        BACKEND_IMAGE = "YOUR_DOCKERHUB_USERNAME/pathnex-backend"
+
+        FRONTEND_IMAGE = "YOUR_DOCKERHUB_USERNAME/pathnex-frontend"
+    }
+
+    stages {
+
+        stage('Checkout') {
+
+            steps {
+
+                git branch: 'main',
+                    url: 'https://github.com/YOUR_USERNAME/pathnex-devops-project.git'
+            }
+        }
+
+        stage('Build Backend') {
+
+            steps {
+
+                sh '''
+                    docker build \
+                    -t $BACKEND_IMAGE:$BUILD_NUMBER \
+                    ./backend
+                '''
+            }
+        }
+
+        stage('Build Frontend') {
+
+            steps {
+
+                sh '''
+                    docker build \
+                    -t $FRONTEND_IMAGE:$BUILD_NUMBER \
+                    ./frontend
+                '''
+            }
+        }
+
+        stage('Push Docker Images') {
+
+            steps {
+
+                sh '''
+                    docker push $BACKEND_IMAGE:$BUILD_NUMBER
+
+                    docker push $FRONTEND_IMAGE:$BUILD_NUMBER
+                '''
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+
+            steps {
+
+                sh '''
+                    helm upgrade --install pathnex ./helm/pathnex \
+                    --set backend.tag=$BUILD_NUMBER \
+                    --set frontend.tag=$BUILD_NUMBER
+                '''
+            }
+        }
+    }
+
+    post {
+
+        success {
+            echo "Pathnex deployment successful!"
+        }
+
+        failure {
+            echo "Pathnex deployment failed!"
+        }
+    }
+}
