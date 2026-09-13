@@ -1,0 +1,27 @@
+#kubernetes
+
+apiversion: apps/v1
+kind:       Deployment
+
+metadata:
+   name: carburn-app
+
+spec:
+  replicas: 2
+
+selector
+  matchLabels:
+   app:  carburn-app
+
+template:
+   metadata: 
+   labels:
+    app: carburn-app
+
+    spec:
+    containers:
+    - name: carburn-container
+      image: carburn-app:v1
+      ports:
+        - containerPort: 3000
+

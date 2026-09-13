@@ -1,0 +1,17 @@
+#terraform
+
+provider "aws" {
+  region ="ap-south-1
+}
+
+resorce "aws-instance" "web-server" {
+ ami           = ami-218872187
+ instance_type = t2.micro
+ tag = {
+    Name       = "carburn-webserver"
+    Enviroment = "dev"
+    project    = "carburn"
+    Manageby   = "terraform"
+
+ }   
+}
